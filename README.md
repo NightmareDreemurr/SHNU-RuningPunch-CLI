@@ -1,2 +1,2 @@
-*Origin:* https://github.com/xiaowanggua/shnuruning\n
+*Origin:* https://github.com/xiaowanggua/shnuruning
 *Contributor: *https://github.com/xiaowanggua
