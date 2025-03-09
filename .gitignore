@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# 环境变量
+.env
+.venv/
+venv/
+env/
+
+# 日志文件
+*.log
+
+# 用户信息文件
+userInfo.json
+
+# IDE 配置文件
+.idea/
+*.iml
+
+# 操作系统生成的文件
+.DS_Store
+Thumbs.db
+
+# 其他
+*.bak
+*.tmp
