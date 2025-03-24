@@ -209,83 +209,230 @@ def install_certificate():
     # 使用老版本的证书路径，这对应于 mitmproxy 的标准路径
     ca_cert_path = Path(os.path.expanduser("~/.mitmproxy/mitmproxy-ca.p12"))
     ca_cert_p12_path = Path(os.path.expanduser("~/.mitmproxy/mitmproxy-ca-cert.p12"))
-    ca_cert_pem_path = Path(os.path.expanduser("~/.mitmproxy/mitmproxy-ca-cert.pem"))
     
     logging.info(f"检查证书路径: {ca_cert_path} 和 {ca_cert_p12_path}")
 
     # 检查证书是否存在（检查两个可能的路径）
     if not ca_cert_path.exists() and not ca_cert_p12_path.exists():
-        print("无法找到 mitmproxy CA 证书，开始生成证书，约限 5 秒。")
-        logging.info("CA 证书不存在，生成中...")
+        print("无法找到 mitmproxy CA 证书，将启动mitmproxy并引导您手动安装证书。")
+        logging.info("CA 证书不存在，引导用户手动安装...")
 
-        def generate_certificate():
-            try:
-                # 使用 Python 模块方式直接运行 mitmproxy，避免路径问题
-                subprocess.run([sys.executable, "-m", "mitmproxy.tools.main"], 
-                              check=True, 
-                              stdout=subprocess.DEVNULL, 
-                              stderr=subprocess.DEVNULL)
-            except Exception as e:
-                logging.error(f"生成证书时发生错误: {e}")
-
-        thread = threading.Thread(target=generate_certificate)
-        thread.start()
-        time.sleep(5)
         
-        # 终止 mitmproxy 进程
+        
+        # 先杀死可能的代理进程
+        kill_proxy_processes()
+        
+        print("正在启动mitmproxy服务...")
+        # 使用多进程而不是线程来运行mitmproxy
         try:
-            # 搜索和终止所有相关进程
-            for proc in psutil.process_iter(['pid', 'name']):
-                try:
-                    proc_name = proc.info['name'].lower()
-                    if 'python' in proc_name:
-                        proc_obj = psutil.Process(proc.info['pid'])
-                        cmdline = " ".join(proc_obj.cmdline()).lower()
-                        if 'mitmproxy' in cmdline:
-                            proc_obj.terminate()
-                            logging.info(f"终止了进程: {proc.info['pid']}")
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
+            # 利用已有的多进程函数运行mitmproxy
+            p = Process(target=start_mitmproxy, name='mitmproxy')
+            p.start()
+            logging.info("mitmproxy进程已启动")
             
-            # 再尝试使用传统方法
-            subprocess.run(["taskkill", "/F", "/IM", "mitmdump.exe"], 
-                          check=False, 
-                          stdout=subprocess.DEVNULL, 
-                          stderr=subprocess.DEVNULL)
-            logging.info("已终止 mitmproxy 进程")
-        except Exception as e:
-            logging.error(f"终止 mitmproxy 进程时出错: {e}")
+            # 等待mitmproxy启动
+            time.sleep(2)
+            
+            # 重要：设置系统代理，确保浏览器流量通过mitmproxy
+            try:
+                subprocess.run(
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f',
+                    shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /t REG_SZ /d 127.0.0.1:8080 /f',
+                    shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                logging.info("系统代理已设置为 127.0.0.1:8080")
+                print("系统代理已设置为 127.0.0.1:8080")
+            except subprocess.CalledProcessError as e:
+                logging.error(f"设置系统代理失败: {e}")
+                print(f"设置系统代理失败: {e}")
+            
+            try:
+                
+                
+                
+                
+                # 打开浏览器引导用户安装证书
+                cert_url = "http://mitm.it/"
+                print(f"正在打开浏览器，请访问 {cert_url} 并按照提示安装证书...")
+                logging.info(f"引导用户访问 {cert_url} 安装证书")
+                # 尝试使用默认浏览器打开证书安装页面
+                import webbrowser
+                webbrowser.open(cert_url)
+                
+                # 清除系统代理
+                try:
+                    subprocess.run(
+                        'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f',
+                        shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logging.info("系统代理已清除")
+                    print("系统代理已清除")
+                except subprocess.CalledProcessError as e:
+                    logging.error(f"清除系统代理失败: {e}")
+                    print(f"清除系统代理失败: {e}")
 
-        # 再次检查证书是否生成
-        if not ca_cert_path.exists() and not ca_cert_p12_path.exists():
-            print("证书生成失败，无法找到 mitmproxy CA 证书。")
-            logging.error("证书生成失败")
+                # 终止mitmproxy进程
+                if p.is_alive():
+                    p.terminate()
+                    p.join()
+                    logging.info("mitmproxy进程已终止")
+                
+                # 检查证书是否已安装
+                if is_certificate_installed():
+                    print("恭喜！mitmproxy CA 证书已成功安装。")
+                    logging.info("证书已成功安装。")
+                    return True
+                else:
+                    print("mitmproxy CA 证书未能成功安装，请再次尝试或手动安装。")
+                    logging.warning("证书未能成功安装。")
+                    return False
+                    
+            except Exception as e:
+                print(f"打开浏览器失败: {e}")
+                logging.error(f"打开浏览器引导用户安装证书失败: {e}")
+                print("请手动打开浏览器，访问 http://mitm.it/ 并按照提示安装证书。")
+                
+                # 确保在出现异常时也终止mitmproxy进程和清除代理
+                try:
+                    subprocess.run(
+                        'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f',
+                        shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except:
+                    pass
+                    
+                if p.is_alive():
+                    p.terminate()
+                    p.join()
+                    logging.info("异常情况下mitmproxy进程已终止")
+                
+                input("证书安装完成后，请按回车键继续...")
+                return False
+                
+        except Exception as e:
+            print(f"启动mitmproxy服务失败: {e}")
+            logging.error(f"启动mitmproxy服务失败: {e}")
             return False
 
-    # 确定实际存在的证书路径
-    cert_to_install = ca_cert_p12_path if ca_cert_p12_path.exists() else ca_cert_path
-    logging.info(f"将安装证书: {cert_to_install}")
-
-    # 安装证书
-    try:
-        subprocess.run([
-            "powershell",
-            "-Command",
-            f'Import-PfxCertificate -FilePath "{cert_to_install}" -CertStoreLocation "Cert:\\CurrentUser\\Root"'
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("证书安装成功。")
-        logging.info("证书已成功安装。")
-    except subprocess.CalledProcessError as e:
-        print(f"证书安装失败: {e}")
-        logging.error(f"证书安装失败: {e}")
-        return False
-
+    # 如果证书已存在，检查是否已安装
     if is_certificate_installed():
         print("mitmproxy CA 证书已正确安装。")
         return True
     else:
-        print("mitmproxy CA 证书未能成功安装。")
-        return False
+        print("检测到证书文件存在，但未安装到系统中。")
+        print("请手动安装证书或使用浏览器访问 http://mitm.it/ 安装。")
+        
+        # 尝试打开浏览器引导用户安装
+        try:
+
+            clear_screen()
+            print("\n请按照以下步骤安装证书:")
+            print("1. 在打开的网页中，点击对应您操作系统的图标下载证书（Get mitmproxy-ca-cert.p12）")
+            print("2. 双击下载的证书文件，按照系统提示安装")
+            print("3. 在证书安装向导中，一路继续安装，最後按是")
+            print("4. 完成安装后，关闭浏览器并返回此程序")
+            
+            print("\n按下回车后，将为您关闭当前代理，并打开mitm.it，请按照提示安装证书。")
+            input("\n阅读完成后，请按回车键继续...")
+            
+            
+            # 先杀死可能的代理进程
+            kill_proxy_processes()
+            
+            # 使用多进程运行mitmproxy
+            p = Process(target=start_mitmproxy, name='mitmproxy')
+            p.start()
+            logging.info("mitmproxy进程已启动（用于现有证书安装）")
+            
+            time.sleep(2)  # 等待mitmproxy启动
+            
+            # 设置系统代理
+            try:
+                subprocess.run(
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f',
+                    shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /t REG_SZ /d 127.0.0.1:8080 /f',
+                    shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                logging.info("系统代理已设置为 127.0.0.1:8080")
+                print("系统代理已设置为 127.0.0.1:8080")
+            except subprocess.CalledProcessError as e:
+                logging.error(f"设置系统代理失败: {e}")
+                print(f"设置系统代理失败: {e}")
+            
+            import webbrowser
+            webbrowser.open("http://mitm.it/") 
+            print("\n正在等待证书安装完成...")
+            print("请在浏览器中完成证书安装，然后返回此窗口按回车键继续...")
+            
+            # 每隔5秒清屏并重复显示提示，防止被日志淹没
+            waiting_start = time.time()
+            while True:
+                time.sleep(5)
+                clear_screen()
+                print("\n" + "="*50)
+                print("请在浏览器中完成证书安装")
+                print("完成后请返回此窗口，按回车键继续...")
+                print("="*50)
+                
+                # 检查是否有键盘输入
+                if msvcrt.kbhit():
+                    # 清空缓冲区
+                    key = msvcrt.getch()
+                    if key == b'\r':  # 回车键
+                        break
+                    
+                # 如果等待超过2分钟，再次询问
+                if time.time() - waiting_start > 120:
+                    choice = input("\n您似乎花了较长时间，是否已完成证书安装？(y/n): ").lower()
+                    if choice == 'y':
+                        break
+                    waiting_start = time.time()  # 重置计时器
+            
+            # 清屏再显示一次确认信息
+            clear_screen()
+            print("\n证书安装已完成，继续程序...\n")
+            
+            # 清除系统代理
+            try:
+                subprocess.run(
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f',
+                    shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                logging.info("系统代理已清除")
+                print("系统代理已清除")
+            except subprocess.CalledProcessError as e:
+                logging.error(f"清除系统代理失败: {e}")
+                print(f"清除系统代理失败: {e}")
+            
+            # 终止mitmproxy进程
+            if p.is_alive():
+                p.terminate()
+                p.join()
+                logging.info("mitmproxy进程已终止")
+        except Exception as e:
+            logging.error(f"打开浏览器引导用户安装证书失败: {e}")
+            # 确保进程被终止和代理被清除
+            try:
+                subprocess.run(
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f',
+                    shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except:
+                pass
+                
+            try:
+                if 'p' in locals() and p.is_alive():
+                    p.terminate()
+                    p.join()
+            except:
+                pass
+        
+        # 再次检查证书是否已安装
+        if is_certificate_installed():
+            print("证书已成功安装。")
+            return True
+        else:
+            print("证书安装失败，请手动检查。")
+            logging.error("证书安装失败，请手动检查。")
+            return False
 
 def start_mitmproxy():
     """启动 mitmproxy"""

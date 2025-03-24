@@ -42,8 +42,10 @@ pip install -r requirements.txt
 
 1. 程序会先检查是否已安装 mitmproxy
 2. 如未安装，会自动下载并安装
-3. 生成证书并安装到系统受信任根证书存储区
-4. 验证证书是否安装成功
+3. 启动mitmproxy并打开浏览器引导您访问http://mitm.it/进行证书安装
+4. 在浏览器中，点击对应您操作系统的图标下载证书
+5. 双击下载的证书文件，按照系统提示安装（Windows系统需要选择"将所有证书放入下列存储"，然后选择"受信任的根证书颁发机构"）
+6. 验证证书是否安装成功
 
 **注意**：证书安装需要管理员权限，程序会自动请求。安装证书后，系统可能会弹出安全提示，请选择"是"。
 
@@ -144,6 +146,13 @@ pip install -r requirements.txt
 10. 改进了用户ID获取流程的稳定性，增加了超时处理和错误捕获
 11. 新增快速完成功能，用户可选择跳过等待时间直接上报完成（存在被系统检测的风险）
 
+### 2025.03.24 更新
+1. 改进了证书安装流程，现在不再自动生成和安装证书，而是启动mitmproxy并用浏览器引导用户访问http://mitm.it/手动安装证书
+2. 修复了证书安装失败的问题
+3. 增加了详细的证书安装指导步骤
+4. 修复了多线程运行mitmproxy导致的"signal only works in main thread"错误，现在使用多进程方式运行mitmproxy
+5. 修复了浏览器访问mitm.it时显示"traffic is not passing through mitmproxy"的问题，确保在访问证书安装页面前正确设置系统代理
+
 ## 功能特点
 
 1. 自动获取用户ID并存储
@@ -164,6 +173,9 @@ pip install -r requirements.txt
 3. 之前的 mitmproxy 进程未正确关闭 - 重启计算机后重试
 4. mitmproxy 未正确安装 - 程序将尝试自动安装，或者可以手动执行 `pip install mitmproxy`
 5. ~~安装后 mitmproxy 不在系统路径中 - 重启计算机后再试~~ (已解决，现在使用模块直接导入)
+6. 证书安装失败 - 现在程序会引导您通过浏览器手动安装证书，按照屏幕提示操作
+7. "signal only works in main thread"错误 - 已修复，改用多进程方式运行mitmproxy
+8. 浏览器显示"traffic is not passing through mitmproxy" - 表示浏览器没有使用mitmproxy代理，已修复系统代理设置流程
 
 如果遇到 "The system cannot find the file specified" 错误，通常是因为 mitmproxy 未安装或不在系统路径中，请尝试以下步骤：
 1. 确保程序使用的是最新版本，已修复此问题
