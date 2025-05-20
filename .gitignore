@@ -8,27 +8,63 @@ __pycache__/
 dist/
 build/
 *.whl
+.pytest_cache/
+.coverage
+htmlcov/
 
 # 环境变量
 .env
 .venv/
 venv/
 env/
+ENV/
 
 # 日志文件
+logs/
 *.log
+*.log.*
 
 # 用户信息文件
 userInfo.json
+userInfo.*.json
 
 # IDE 配置文件
 .idea/
+.vscode/
 *.iml
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
 
 # 操作系统生成的文件
 .DS_Store
 Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
 
 # 其他
 *.bak
 *.tmp
+*.temp
+*.cache
+*.pid
+*.seed
+*.pid.lock
+
+# 证书文件
+*.p12
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.p7b
+*.p7c
+*.pfx
+*.p12
+*.key
+*.csr
+*.srl

@@ -18,6 +18,10 @@ import msvcrt  # 用于检测按键（仅限Windows）
 import sys  # 添加 sys 引用用于显示进度条
 import socket
 import ctypes
+import traceback
+from datetime import datetime
+import logging.handlers
+import random  # 添加random模块导入
 
 # 尝试导入 psutil，如果未安装则自动安装
 try:
@@ -26,10 +30,62 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "psutil"])
     import psutil
 
+def setup_logging():
+    """配置日志系统"""
+    # 创建logs目录（如果不存在）
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    # 生成日志文件名，包含日期
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    log_file = log_dir / f"shnuruning_{current_date}.log"
+    
+    # 配置日志格式
+    log_format = logging.Formatter(
+        '%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+    )
+    
+    # 配置文件处理器
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file,
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(log_format)
+    
+    # 配置控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(log_format)
+    
+    # 获取根日志记录器
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    
+    # 清除现有的处理器
+    root_logger.handlers.clear()
+    
+    # 添加处理器
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+    
+    return root_logger
+
+# 设置日志系统
+logger = setup_logging()
+
+def log_exception(e: Exception, context: str = ""):
+    """记录异常信息，包括完整的traceback"""
+    error_msg = f"{context} - 发生错误: {str(e)}"
+    logger.error(error_msg)
+    logger.error("详细错误信息:")
+    logger.error(traceback.format_exc())
+
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
+    except Exception as e:
+        log_exception(e, "检查管理员权限时")
         return False
 
 # 如果不是管理员权限则请求管理员权限重新运行脚本
@@ -71,18 +127,18 @@ def kill_proxy_processes():
     for proc in psutil.process_iter(['pid', 'name']):
         try:
             if proc.info['name'] in known_proxy_processes:
-                logging.info(f"尝试终止代理进程: {proc.info['name']} (PID: {proc.info['pid']})")
+                logger.info(f"尝试终止代理进程: {proc.info['name']} (PID: {proc.info['pid']})")
                 proc_obj = psutil.Process(proc.info['pid'])
                 proc_obj.terminate()  # 尝试优雅终止进程
                 try:
                     proc_obj.wait(timeout=3)  # 等待进程结束
-                    logging.info(f"已终止进程: {proc.info['name']} (PID: {proc.info['pid']})")
+                    logger.info(f"已终止进程: {proc.info['name']} (PID: {proc.info['pid']})")
                 except psutil.TimeoutExpired:
-                    logging.warning(f"进程 {proc.info['name']} 未能在3秒内结束，尝试强制结束。")
+                    logger.warning(f"进程 {proc.info['name']} 未能在3秒内结束，尝试强制结束。")
                     proc_obj.kill()  # 强制结束
-                    logging.info(f"已强制结束进程: {proc.info['name']} (PID: {proc.info['pid']})")
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
+                    logger.info(f"已强制结束进程: {proc.info['name']} (PID: {proc.info['pid']})")
+        except Exception as e:
+            log_exception(e, f"处理进程 {proc.info.get('name', 'unknown')} 时")
 
 def is_proxy_enabled():
     """检测系统代理是否已启用"""
@@ -92,17 +148,17 @@ def is_proxy_enabled():
         proxy_enable, regtype = winreg.QueryValueEx(key, "ProxyEnable")
         proxy_server, regtype = winreg.QueryValueEx(key, "ProxyServer")
         if proxy_enable == 1:
-            logging.info(f"系统代理已启用，代理服务器: {proxy_server}")
+            logger.info(f"系统代理已启用，代理服务器: {proxy_server}")
             return True
     except Exception as e:
-        logging.error(f"检测系统代理设置时出错: {e}")
+        log_exception(e, "检测系统代理设置时")
 
     # 检查环境变量中的代理设置
     http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
     https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
     socks_proxy = os.environ.get('SOCKS_PROXY') or os.environ.get('socks_proxy')
     if http_proxy or https_proxy or socks_proxy:
-        logging.info(f"环境变量中检测到代理设置: HTTP_PROXY={http_proxy}, HTTPS_PROXY={https_proxy}, SOCKS_PROXY={socks_proxy}")
+        logger.info(f"环境变量中检测到代理设置: HTTP_PROXY={http_proxy}, HTTPS_PROXY={https_proxy}, SOCKS_PROXY={socks_proxy}")
         return True
 
     # 检查已知代理进程
@@ -110,23 +166,23 @@ def is_proxy_enabled():
     for proc in psutil.process_iter(['name']):
         try:
             if proc.info['name'] in known_proxy_processes:
-                logging.info(f"检测到代理进程运行: {proc.info['name']}")
+                logger.info(f"检测到代理进程运行: {proc.info['name']}")
                 return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
+        except Exception as e:
+            log_exception(e, f"检查进程 {proc.info.get('name', 'unknown')} 时")
 
     # 检查特定端口是否在监听
-    proxy_ports = [
-        7890, 7891, 7892, 7893
-    ]
-
+    proxy_ports = [7890, 7891, 7892, 7893]
     for port in proxy_ports:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.1)
-            result = sock.connect_ex(('127.0.0.1', port))
-            if result == 0:
-                logging.info(f"检测到端口 {port} 正在监听，可能是代理服务器。")
-                return True
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.1)
+                result = sock.connect_ex(('127.0.0.1', port))
+                if result == 0:
+                    logger.info(f"检测到端口 {port} 正在监听，可能是代理服务器。")
+                    return True
+        except Exception as e:
+            log_exception(e, f"检查端口 {port} 时")
     return False
 
 def is_certificate_installed():
@@ -134,31 +190,98 @@ def is_certificate_installed():
     try:
         result = subprocess.run(["certutil", "-user", "-store", "Root"], capture_output=True, text=True, check=True)
         if "mitmproxy" in result.stdout.lower():
-            logging.info("mitmproxy CA 证书已安装到当前用户的受信任的根存储区。")
+            logger.info("mitmproxy CA 证书已安装到当前用户的受信任的根存储区。")
             return True
         else:
-            logging.warning("mitmproxy CA 证书未安装到当前用户的受信任的根存储区。")
+            logger.warning("mitmproxy CA 证书未安装到当前用户的受信任的根存储区。")
             return False
     except subprocess.CalledProcessError as e:
-        logging.error(f"检查证书安装状态时出错: {e}")
+        logger.error(f"检查证书安装状态时出错: {e}")
         return False
 
-def post(url, data, headers=None):
-    """发送 POST 请求并处理响应"""
-    try:
-        response = requests.post(url, data=data, headers=headers)
-        response.raise_for_status()
-        json_data = response.json()
-        logging.info(f"POST {url} 响应: {json_data}")
-        return json_data
-    except requests.exceptions.RequestException as e:
-        logging.error(f"POST 请求失败: {e}")
-        return None
+def post(url, data, headers=None, max_retries=3, retry_delay=2):
+    """发送 POST 请求并处理响应
+    
+    Args:
+        url: 请求URL
+        data: 请求数据
+        headers: 请求头
+        max_retries: 最大重试次数
+        retry_delay: 重试间隔（秒）
+    """
+    retry_count = 0
+    last_error = None
+    
+    while retry_count < max_retries:
+        try:
+            # 设置请求超时
+            response = requests.post(
+                url, 
+                data=data, 
+                headers=headers,
+                timeout=10,  # 设置10秒超时
+                verify=True  # 启用SSL验证
+            )
+            response.raise_for_status()
+            json_data = response.json()
+            logger.info(f"POST {url} 响应: {json_data}")
+            return json_data
+            
+        except requests.exceptions.SSLError as e:
+            last_error = e
+            logger.warning(f"SSL错误 (尝试 {retry_count + 1}/{max_retries}): {str(e)}")
+            if "EOF occurred in violation of protocol" in str(e):
+                logger.info("检测到SSL连接意外终止，可能是网络问题或服务器问题")
+            elif "certificate verify failed" in str(e):
+                logger.error("SSL证书验证失败，请检查证书是否正确安装")
+                break  # 证书问题不重试
+                
+        except requests.exceptions.ConnectionError as e:
+            last_error = e
+            logger.warning(f"连接错误 (尝试 {retry_count + 1}/{max_retries}): {str(e)}")
+            
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            logger.warning(f"请求超时 (尝试 {retry_count + 1}/{max_retries}): {str(e)}")
+            
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            logger.warning(f"请求错误 (尝试 {retry_count + 1}/{max_retries}): {str(e)}")
+            
+        except Exception as e:
+            last_error = e
+            logger.error(f"未知错误: {str(e)}")
+            break  # 未知错误不重试
+            
+        retry_count += 1
+        if retry_count < max_retries:
+            logger.info(f"等待 {retry_delay} 秒后重试...")
+            time.sleep(retry_delay)
+    
+    # 所有重试都失败后
+    error_msg = f"POST请求到 {url} 失败，已重试 {retry_count} 次"
+    if last_error:
+        error_msg += f"，最后错误: {str(last_error)}"
+    logger.error(error_msg)
+    
+    # 根据错误类型给出具体建议
+    if isinstance(last_error, requests.exceptions.SSLError):
+        logger.error("SSL错误，请检查：")
+        logger.error("1. 网络连接是否稳定")
+        logger.error("2. 是否已正确安装mitmproxy证书")
+        logger.error("3. 是否关闭了其他代理软件")
+    elif isinstance(last_error, requests.exceptions.ConnectionError):
+        logger.error("连接错误，请检查：")
+        logger.error("1. 网络连接是否正常")
+        logger.error("2. 服务器是否可访问")
+        logger.error("3. 防火墙设置是否正确")
+    
+    return None
 
 def runs(point):
     """模拟跑步位置点上报"""
     if point < 0 or point >= len(POINTS):
-        logging.error("无效的位置点索引")
+        logger.error("无效的位置点索引")
         return
     points = {
         "userId": userids,
@@ -167,7 +290,7 @@ def runs(point):
         "posLatitude": POINTS[point]["posLatitude"],
     }
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-    logging.info(f"发送位置点: {points}")
+    logger.info(f"发送位置点: {points}")
     post(URL_SELECT_STUDENT_SIGN_IN, points, headers=headers)
 
 def is_mitmproxy_installed():
@@ -185,15 +308,15 @@ def is_mitmproxy_installed():
 def install_mitmproxy():
     """安装 mitmproxy"""
     print("正在安装 mitmproxy，请稍等...")
-    logging.info("开始安装 mitmproxy")
+    logger.info("开始安装 mitmproxy")
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "mitmproxy"])
         print("mitmproxy 安装成功")
-        logging.info("mitmproxy 安装成功")
+        logger.info("mitmproxy 安装成功")
         return True
     except subprocess.CalledProcessError as e:
         print(f"mitmproxy 安装失败: {e}")
-        logging.error(f"mitmproxy 安装失败: {e}")
+        logger.error(f"mitmproxy 安装失败: {e}")
         return False
 
 def install_certificate():
@@ -203,19 +326,19 @@ def install_certificate():
         print("未检测到 mitmproxy，尝试安装...")
         if not install_mitmproxy():
             print("mitmproxy 安装失败，无法生成证书")
-            logging.error("mitmproxy 安装失败，无法生成证书")
+            logger.error("mitmproxy 安装失败，无法生成证书")
             return False
 
     # 使用老版本的证书路径，这对应于 mitmproxy 的标准路径
     ca_cert_path = Path(os.path.expanduser("~/.mitmproxy/mitmproxy-ca.p12"))
     ca_cert_p12_path = Path(os.path.expanduser("~/.mitmproxy/mitmproxy-ca-cert.p12"))
     
-    logging.info(f"检查证书路径: {ca_cert_path} 和 {ca_cert_p12_path}")
+    logger.info(f"检查证书路径: {ca_cert_path} 和 {ca_cert_p12_path}")
 
     # 检查证书是否存在（检查两个可能的路径）
     if not ca_cert_path.exists() and not ca_cert_p12_path.exists():
         print("无法找到 mitmproxy CA 证书，将启动mitmproxy并引导您手动安装证书。")
-        logging.info("CA 证书不存在，引导用户手动安装...")
+        logger.info("CA 证书不存在，引导用户手动安装...")
 
         
         
@@ -228,7 +351,7 @@ def install_certificate():
             # 利用已有的多进程函数运行mitmproxy
             p = Process(target=start_mitmproxy, name='mitmproxy')
             p.start()
-            logging.info("mitmproxy进程已启动")
+            logger.info("mitmproxy进程已启动")
             
             # 等待mitmproxy启动
             time.sleep(2)
@@ -241,10 +364,10 @@ def install_certificate():
                 subprocess.run(
                     'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /t REG_SZ /d 127.0.0.1:8080 /f',
                     shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                logging.info("系统代理已设置为 127.0.0.1:8080")
+                logger.info("系统代理已设置为 127.0.0.1:8080")
                 print("系统代理已设置为 127.0.0.1:8080")
             except subprocess.CalledProcessError as e:
-                logging.error(f"设置系统代理失败: {e}")
+                logger.error(f"设置系统代理失败: {e}")
                 print(f"设置系统代理失败: {e}")
             
             try:
@@ -255,7 +378,7 @@ def install_certificate():
                 # 打开浏览器引导用户安装证书
                 cert_url = "http://mitm.it/"
                 print(f"正在打开浏览器，请访问 {cert_url} 并按照提示安装证书...")
-                logging.info(f"引导用户访问 {cert_url} 安装证书")
+                logger.info(f"引导用户访问 {cert_url} 安装证书")
                 # 尝试使用默认浏览器打开证书安装页面
                 import webbrowser
                 webbrowser.open(cert_url)
@@ -265,31 +388,31 @@ def install_certificate():
                     subprocess.run(
                         'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f',
                         shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    logging.info("系统代理已清除")
+                    logger.info("系统代理已清除")
                     print("系统代理已清除")
                 except subprocess.CalledProcessError as e:
-                    logging.error(f"清除系统代理失败: {e}")
+                    logger.error(f"清除系统代理失败: {e}")
                     print(f"清除系统代理失败: {e}")
 
                 # 终止mitmproxy进程
                 if p.is_alive():
                     p.terminate()
                     p.join()
-                    logging.info("mitmproxy进程已终止")
+                    logger.info("mitmproxy进程已终止")
                 
                 # 检查证书是否已安装
                 if is_certificate_installed():
                     print("恭喜！mitmproxy CA 证书已成功安装。")
-                    logging.info("证书已成功安装。")
+                    logger.info("证书已成功安装。")
                     return True
                 else:
                     print("mitmproxy CA 证书未能成功安装，请再次尝试或手动安装。")
-                    logging.warning("证书未能成功安装。")
+                    logger.warning("证书未能成功安装。")
                     return False
                     
             except Exception as e:
                 print(f"打开浏览器失败: {e}")
-                logging.error(f"打开浏览器引导用户安装证书失败: {e}")
+                logger.error(f"打开浏览器引导用户安装证书失败: {e}")
                 print("请手动打开浏览器，访问 http://mitm.it/ 并按照提示安装证书。")
                 
                 # 确保在出现异常时也终止mitmproxy进程和清除代理
@@ -303,14 +426,14 @@ def install_certificate():
                 if p.is_alive():
                     p.terminate()
                     p.join()
-                    logging.info("异常情况下mitmproxy进程已终止")
+                    logger.info("异常情况下mitmproxy进程已终止")
                 
                 input("证书安装完成后，请按回车键继续...")
                 return False
                 
         except Exception as e:
             print(f"启动mitmproxy服务失败: {e}")
-            logging.error(f"启动mitmproxy服务失败: {e}")
+            logger.error(f"启动mitmproxy服务失败: {e}")
             return False
 
     # 如果证书已存在，检查是否已安装
@@ -341,7 +464,7 @@ def install_certificate():
             # 使用多进程运行mitmproxy
             p = Process(target=start_mitmproxy, name='mitmproxy')
             p.start()
-            logging.info("mitmproxy进程已启动（用于现有证书安装）")
+            logger.info("mitmproxy进程已启动（用于现有证书安装）")
             
             time.sleep(2)  # 等待mitmproxy启动
             
@@ -353,10 +476,10 @@ def install_certificate():
                 subprocess.run(
                     'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /t REG_SZ /d 127.0.0.1:8080 /f',
                     shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                logging.info("系统代理已设置为 127.0.0.1:8080")
+                logger.info("系统代理已设置为 127.0.0.1:8080")
                 print("系统代理已设置为 127.0.0.1:8080")
             except subprocess.CalledProcessError as e:
-                logging.error(f"设置系统代理失败: {e}")
+                logger.error(f"设置系统代理失败: {e}")
                 print(f"设置系统代理失败: {e}")
             
             import webbrowser
@@ -397,19 +520,19 @@ def install_certificate():
                 subprocess.run(
                     'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f',
                     shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                logging.info("系统代理已清除")
+                logger.info("系统代理已清除")
                 print("系统代理已清除")
             except subprocess.CalledProcessError as e:
-                logging.error(f"清除系统代理失败: {e}")
+                logger.error(f"清除系统代理失败: {e}")
                 print(f"清除系统代理失败: {e}")
             
             # 终止mitmproxy进程
             if p.is_alive():
                 p.terminate()
                 p.join()
-                logging.info("mitmproxy进程已终止")
+                logger.info("mitmproxy进程已终止")
         except Exception as e:
-            logging.error(f"打开浏览器引导用户安装证书失败: {e}")
+            logger.error(f"打开浏览器引导用户安装证书失败: {e}")
             # 确保进程被终止和代理被清除
             try:
                 subprocess.run(
@@ -431,7 +554,7 @@ def install_certificate():
             return True
         else:
             print("证书安装失败，请手动检查。")
-            logging.error("证书安装失败，请手动检查。")
+            logger.error("证书安装失败，请手动检查。")
             return False
 
 def start_mitmproxy():
@@ -442,7 +565,7 @@ def run_mitmproxy() -> Process:
     """运行 mitmproxy 的多进程"""
     p = Process(target=start_mitmproxy, name='mitmproxy')
     p.start()
-    logging.info("mitmproxy 进程已启动。")
+    logger.info("mitmproxy 进程已启动。")
     return p
 
 def stop_mitmproxy(p: Process) -> None:
@@ -450,7 +573,7 @@ def stop_mitmproxy(p: Process) -> None:
     if p.is_alive():
         p.terminate()
         p.join()
-        logging.info("mitmproxy 进程已终止。")
+        logger.info("mitmproxy 进程已终止。")
 
 def start_getting_user_id():
     """开始获取用户 ID 的流程"""
@@ -462,10 +585,10 @@ def start_getting_user_id():
         subprocess.run(
             'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /t REG_SZ /d 127.0.0.1:8080 /f',
             shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        logging.info("系统代理已设置为 127.0.0.1:8080。")
+        logger.info("系统代理已设置为 127.0.0.1:8080。")
     except subprocess.CalledProcessError as e:
         print(f"设置系统代理失败: {e}")
-        logging.error(f"设置系统代理失败: {e}")
+        logger.error(f"设置系统代理失败: {e}")
         return None
 
     p = run_mitmproxy()
@@ -478,10 +601,10 @@ def stop_mitmproxy_and_proxy(p: Process):
         subprocess.run(
             'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f',
             shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        logging.info("系统代理已清除。")
+        logger.info("系统代理已清除。")
     except subprocess.CalledProcessError as e:
         print(f"清除系统代理失败: {e}")
-        logging.error(f"清除系统代理失败: {e}")
+        logger.error(f"清除系统代理失败: {e}")
 
 def clear_system_proxy():
     """清除系统代理设置"""
@@ -491,9 +614,9 @@ def clear_system_proxy():
             "-Command",
             'Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" -Name ProxyEnable -Value 0'
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        logging.info("系统代理已清除。")
+        logger.info("系统代理已清除。")
     except subprocess.CalledProcessError as e:
-        logging.error(f"清除系统代理失败: {e}")
+        logger.error(f"清除系统代理失败: {e}")
 
 def display_progress_bar(progress, total, bar_length=50):
     """显示进度条"""
@@ -562,12 +685,13 @@ def finish(cancelled=False):
             "totalTime": int(run_times / 60),
             "data": []
         }
-        logging.info(f"上报结束数据: {data}")
+        logger.info(f"上报结束数据: {data}")
         r = post(URL_INSERT_FINISH_RUNNING, data=json.dumps(data), headers={'Content-Type': 'application/json'})
         if r:
             print("\n跑步结束，已上报成功。请打开小程序检查是否次数增加。")
         else:
             print("\n跑步结束，上报失败。")
+
 
 def start_countdown():
     global run_distance, run_times, recordId, userids, user_info
@@ -593,7 +717,7 @@ def start_countdown():
         clear_screen()
         start_countdown()
         return
-    
+
     # 选择跑步模式
     clear_screen()
     print("\n===== 跑步模式选择 =====")
@@ -602,44 +726,87 @@ def start_countdown():
     print("2. 快速完成（立即上报完成结果）")
     print("\n⚠️ 警告：选择快速完成模式可能会被后台系统检测到异常行为，")
     print("   可能导致本次跑步记录被清除或账号被标记。请自行承担风险。")
-    
+
     run_mode = '0'
     while run_mode not in ['1', '2']:
         run_mode = input("\n请选择模式 (1/2): ").strip()
         if run_mode not in ['1', '2']:
             print("输入无效，请输入1或2。")
 
-    # 获取runningRecord
-    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-    r = post(URL_INSERT_START_RUNNING, {'userId': userids}, headers=headers)
-    if r and 'data' in r and 'runningRecord' in r['data']:
-        recordId = r["data"]["runningRecord"]
-        logging.info(f"取得 recordId: {recordId}")
-    else:
-        print("无法取得 runningRecord。")
-        time.sleep(2)
+    # 如果选择快速完成模式，询问次数
+    run_count = 1
+    if run_mode == '2':
+        try:
+            run_count_input = input("\n请输入连续跑步次数 (默认为1): ").strip()
+            if run_count_input:
+                run_count = int(run_count_input)
+                if run_count <= 0:
+                    print("次数必须为正整数，设置为默认值1。")
+                    run_count = 1
+                elif run_count > 10:
+                    confirmation = input("⚠️ 警告：设置较高次数可能增加检测风险。确定继续吗？(y/n): ").lower()
+                    if confirmation != 'y':
+                        print("已取消，设置为默认值1。")
+                        run_count = 1
+        except ValueError:
+            print("输入无效，使用默认值1。")
+            run_count = 1
+
+    # 执行跑步逻辑
+    for current_run in range(1, run_count + 1):
+        if run_count > 1:
+            clear_screen()
+            print(f"\n===== 正在执行第 {current_run}/{run_count} 次跑步 =====")
+
+        # 获取runningRecord
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        r = post(URL_INSERT_START_RUNNING, {'userId': userids}, headers=headers)
+        if r and 'data' in r and 'runningRecord' in r['data']:
+            recordId = r["data"]["runningRecord"]
+            logger.info(f"取得 recordId: {recordId}")
+        else:
+            print("无法取得 runningRecord。")
+            if current_run > 1:
+                print(f"已完成 {current_run - 1}/{run_count} 次跑步。")
+            time.sleep(2)
+            clear_screen()
+            return
+
+        # 发送初始位置点
+        runs(0)
+        time.sleep(1)
+        runs(1)
+        time.sleep(1)
+        runs(2)
+
+        # 根据选择的模式进行操作
+        if run_mode == '1':
+            # 正常倒计时模式
+            print(f"\n倒计时开始: {run_time * 60} 秒")
+            countdown_with_progress_bar(run_time * 60)
+            # 只跑一次，不需要循环
+            break
+        else:  # run_mode == '2'
+            # 快速完成模式
+            print("\n您选择了快速完成模式，正在上报跑步结束...")
+            logger.info("用户选择快速完成模式，跳过倒计时")
+            time.sleep(2)  # 稍微等待一下，让用户能看到提示
+            finish()  # 直接调用完成函数
+
+            # 如果不是最后一次跑步，等待一个随机时间再开始下一次
+            if current_run < run_count:
+                wait_time = random.randint(5, 15)  # 5-15秒随机等待
+                print(f"\n等待 {wait_time} 秒后开始下一次跑步...")
+                for i in range(wait_time, 0, -1):
+                    print(f"下一次跑步将在 {i} 秒后开始...", end='\r')
+                    time.sleep(1)
+                print(" " * 50, end='\r')  # 清除倒计时行
+
+    if run_mode == '2' and run_count > 1:
+        print(f"\n✅ 已成功完成 {run_count} 次跑步！")
+        input("\n按回车键返回主菜单...")
         clear_screen()
-        return
-
-    # 发送初始位置点
-    runs(0)
-    time.sleep(1)
-    runs(1)
-    time.sleep(1)
-    runs(2)
-    
-    # 根据选择的模式进行操作
-    if run_mode == '1':
-        # 正常倒计时模式
-        print(f"\n倒计时开始: {run_time * 60} 秒")
-        countdown_with_progress_bar(run_time * 60)
-    else:  # run_mode == '2'
-        # 快速完成模式
-        print("\n您选择了快速完成模式，正在上报跑步结束...")
-        logging.info("用户选择快速完成模式，跳过倒计时")
-        time.sleep(2)  # 稍微等待一下，让用户能看到提示
-        finish()  # 直接调用完成函数
-
+        display_interface1()
 def check_user_id_and_show_run_screen():
     global userids, user_info
     if os.path.exists("userInfo.json") and os.path.getsize("userInfo.json") > 0:
@@ -653,7 +820,7 @@ def check_user_id_and_show_run_screen():
                 else:
                     # 新格式（多用户数组）
                     users = json.loads(content)
-                logging.info(f"读取到 {len(users)} 个用户信息")
+                logger.info(f"读取到 {len(users)} 个用户信息")
             
             if not users:
                 print("未找到有效的用户信息，请先获取用户ID。")
@@ -703,19 +870,19 @@ def check_user_id_and_show_run_screen():
                     time.sleep(1)
             
         except FileNotFoundError:
-            logging.error("userInfo.json 未找到。")
+            logger.error("userInfo.json 未找到。")
             print("文件错误: userInfo.json 未找到。")
             time.sleep(2)
             clear_screen()
             display_interface1()
         except json.JSONDecodeError as e:
-            logging.error(f"解析 userInfo.json 时出错: {e}")
+            logger.error(f"解析 userInfo.json 时出错: {e}")
             print(f"文件错误: 解析 userInfo.json 时出错: {e}")
             time.sleep(2)
             clear_screen()
             display_interface1()
         except IOError as e:
-            logging.error(f"读取文件时出错: {e}")
+            logger.error(f"读取文件时出错: {e}")
             print(f"文件错误: 读取文件时出错: {e}")
             time.sleep(2)
             clear_screen()
@@ -819,7 +986,7 @@ def get_user_id_flow():
             if is_proxy_enabled():
                 print("\n检测到系统代理已开启，请手动关闭所有VPN/梯子/代理服务后再尝试获取用户ID。")
                 print("请关闭代理后，重新运行程序。")
-                logging.warning("用户尝试获取userID时代理仍已开启。")
+                logger.warning("用户尝试获取userID时代理仍已开启。")
                 input("按任意键返回主界面...")
                 display_interface1()
                 return
@@ -852,7 +1019,7 @@ def get_user_id_flow():
                                 # 使用最后一个用户（最新添加的）
                                 user_info_local = users[-1] if users else {}
                     except json.JSONDecodeError as e:
-                        logging.error(f"解析 userInfo.json 时出错: {e}")
+                        logger.error(f"解析 userInfo.json 时出错: {e}")
                         print(f"解析用户信息文件出错: {e}")
                         time.sleep(2)
                         stop_mitmproxy_and_proxy(p)
@@ -862,9 +1029,9 @@ def get_user_id_flow():
                     # 确保安全停止 mitmproxy 进程
                     try:
                         stop_mitmproxy_and_proxy(p)
-                        logging.info("成功停止 mitmproxy 进程和代理")
+                        logger.info("成功停止 mitmproxy 进程和代理")
                     except Exception as e:
-                        logging.error(f"停止 mitmproxy 时出错: {e}")
+                        logger.error(f"停止 mitmproxy 时出错: {e}")
                         print(f"警告: 停止后台进程时出错，可能需要手动清理。错误: {e}")
                         time.sleep(2)
                     
@@ -911,11 +1078,11 @@ def get_user_id_flow():
                 elapsed_time = time.time() - start_time
                 if elapsed_time > max_wait_time:
                     print("\n等待超时，未能成功获取用户ID。")
-                    logging.warning("获取用户ID超时")
+                    logger.warning("获取用户ID超时")
                     try:
                         stop_mitmproxy_and_proxy(p)
                     except Exception as e:
-                        logging.error(f"超时后停止 mitmproxy 时出错: {e}")
+                        logger.error(f"超时后停止 mitmproxy 时出错: {e}")
                     
                     retry = input("是否重试？(Y/N): ").strip().upper()
                     if retry == 'Y':
@@ -931,7 +1098,7 @@ def get_user_id_flow():
                 time.sleep(1)
                 
         except Exception as e:
-            logging.error(f"获取用户ID过程中发生错误: {e}")
+            logger.error(f"获取用户ID过程中发生错误: {e}")
             print(f"\n出现错误: {e}")
             try:
                 stop_mitmproxy_and_proxy(p)
@@ -949,31 +1116,50 @@ def get_user_id_flow():
         get_user_id_flow()
 
 def main():
-    if not is_certificate_installed():
-        print("检测到未安装 mitmproxy CA 证书，开始安装。")
-        success = install_certificate()
-        if not success:
-            print("证书安装失败，请手动检查。")
-            logging.error("证书安装失败，请手动检查。")
-            time.sleep(2)
-    else:
-        print("mitmproxy CA 证书已安装。")
-    time.sleep(2)
-
-    if not (os.path.exists("userInfo.json") and os.path.getsize("userInfo.json") > 0):
-        clear_screen()
-        print("\n您没有用户ID或用户信息, 是否要开始获取? 缺失userId无法进行跑步。")
-        choice = input("是否开始获取用户ID？（Y/N）：").strip().upper()
-        if choice == 'Y':
-            get_user_id_flow()
-        elif choice == 'N':
-            pass
+    try:
+        logger.info("程序启动")
+        if not is_certificate_installed():
+            print("检测到未安装 mitmproxy CA 证书，开始安装。")
+            success = install_certificate()
+            if not success:
+                print("证书安装失败，请手动检查。")
+                logger.error("证书安装失败，请手动检查。")
+                time.sleep(2)
         else:
-            print("输入无效，请输入Y或N。")
-            main()
+            print("mitmproxy CA 证书已安装。")
+            logger.info("mitmproxy CA 证书已安装")
+        time.sleep(2)
 
-    display_interface1()
+        if not (os.path.exists("userInfo.json") and os.path.getsize("userInfo.json") > 0):
+            clear_screen()
+            print("\n您没有用户ID或用户信息, 是否要开始获取? 缺失userId无法进行跑步。")
+            choice = input("是否开始获取用户ID？（Y/N）：").strip().upper()
+            if choice == 'Y':
+                get_user_id_flow()
+            elif choice == 'N':
+                pass
+            else:
+                print("输入无效，请输入Y或N。")
+                main()
 
+        display_interface1()
+    except Exception as e:
+        log_exception(e, "程序主函数执行时")
+        print(f"程序发生错误: {str(e)}")
+        print("请查看logs目录下的日志文件了解详细信息。")
+        input("按回车键退出...")
+        sys.exit(1)
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n程序被用户中断")
+        logger.info("程序被用户中断")
+        sys.exit(0)
+    except Exception as e:
+        log_exception(e, "程序启动时")
+        print(f"程序发生严重错误: {str(e)}")
+        print("请查看logs目录下的日志文件了解详细信息。")
+        input("按回车键退出...")
+        sys.exit(1)
